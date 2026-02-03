@@ -1146,7 +1146,7 @@ export class SmartsheetService {
                                 throw new Error(`Validation result is undefined for schedule ${scheduleId}`);
                             }
 
-                            const isDeletedValue = validationResult.exists ? "No" : "Yes";
+                            const isDeletedValue = validationResult.exists ? "false" : "true";
                             if (!validationResult.exists) {
                                 results.deletedSchedulesFound++;
                                 console.log(
