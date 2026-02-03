@@ -184,3 +184,59 @@ export type SimproContractorWorkOrderType ={
     LineItemQty: string | number | undefined;
     LineItemAmount: string | number | undefined;
 }
+
+/**
+ * Type for schedule deletion check operation
+ * Represents the result of validating a schedule's existence in SimPro
+ */
+export type ScheduleValidationResultType = {
+    exists: boolean;
+    scheduleID: number | string;
+    message: string;
+    data?: any;
+    errorStatus?: number;
+};
+
+/**
+ * Type for schedule deletion check service response
+ * Contains summary of the deletion check operation
+ */
+export type ScheduleDeletionCheckResultType = {
+    status: string;
+    message: string;
+    totalSchedulesChecked: number;
+    deletedSchedulesFound: number;
+    activeSchedulesFound: number;
+    updatedRows: (number | string)[];
+    erroredSchedules: ScheduleCheckErrorType[];
+};
+
+/**
+ * Type for errors encountered during schedule deletion check
+ */
+export type ScheduleCheckErrorType = {
+    rowId: number | string;
+    error: string;
+};
+
+/**
+ * Type for schedule row data used in deletion check
+ * Combines the key columns needed to validate schedule existence
+ */
+export type ScheduleCheckRowType = {
+    scheduleId: number | string;
+    jobId: number | string;
+    sectionId: number | string;
+    costCenterId: number | string;
+    rowId: number | string;
+    isDeleted?: string;
+};
+
+/**
+ * Type for sheet ID override configuration
+ * Allows specifying custom sheet IDs instead of using environment variables
+ */
+export type SheetIdOverrideType = {
+    activeSheetId: string;
+    archivedSheetId: string;
+};
