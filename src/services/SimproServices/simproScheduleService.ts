@@ -424,3 +424,83 @@ export const fetchNextDateScheduleData = async () => {
     }
 }
 
+/**
+ * Validates if a schedule exists in SimPro API
+ * Makes an API call to fetch the schedule and checks if it returns successfully
+ * 
+ * @param jobID - The Job ID
+ * @param sectionID - The Section ID
+ * @param costCenterID - The Job Cost Center ID
+ * @param scheduleID - The Schedule ID to validate
+ * @returns Object with status and details about schedule existence
+ * 
+ * @example
+ * const result = await validateScheduleExistence(123, 456, 789, 101112);
+ * // Returns: { exists: true, scheduleID: 101112, message: "Schedule found" }
+ * // Or: { exists: false, scheduleID: 101112, message: "Schedule not found or deleted" }
+ */
+export const validateScheduleExistence = async (
+    jobID: number | string,
+    sectionID: number | string,
+    costCenterID: number | string,
+    scheduleID: number | string
+) => {
+    try {
+        const apiUrl = `/jobs/${jobID}/sections/${sectionID}/costCenters/${costCenterID}/schedules/${scheduleID}`;
+        console.log(`Validating schedule existence: ${apiUrl}`);
+        
+        const response = await axiosSimPRO.get(`${apiUrl}?columns=ID,Staff,Date,Blocks,Notes`);
+        
+        if (response?.data?.ID) {
+            console.log(`Schedule ${scheduleID} validation successful - Schedule exists`);
+            return {
+                exists: true,
+                scheduleID: scheduleID,
+                message: "Schedule found in SimPro",
+                data: response.data
+            };
+        }
+    } catch (err) {
+        if (err instanceof AxiosError) {
+            console.log(`Schedule ${scheduleID} validation error:`, err.response?.status);
+            console.log("Error details:", err.response?.data);
+            
+            const errors = err?.response?.data?.errors;
+            
+            // Check if it's a 404 or "Schedule not found" error
+            if (
+                err.response?.status === 404 ||
+                (Array.isArray(errors) && errors.some((e: any) => 
+                    e?.message?.includes("not found") || 
+                    e?.message?.includes("Schedule not found")
+                ))
+            ) {
+                console.log(`Schedule ${scheduleID} - Schedule not found or deleted in SimPro`);
+                return {
+                    exists: false,
+                    scheduleID: scheduleID,
+                    message: "Schedule not found or deleted from SimPro",
+                    errorStatus: err.response?.status
+                };
+            }
+            
+            // For other API errors, throw
+            console.error(`Unexpected error validating schedule ${scheduleID}:`, err.response?.data);
+            throw {
+                message: "Error validating schedule existence",
+                scheduleID: scheduleID,
+                error: err.response?.data,
+                status: err.response?.status
+            };
+        } else {
+            // For non-Axios errors
+            console.error(`Unexpected error validating schedule ${scheduleID}:`, err);
+            throw {
+                message: "Unexpected error validating schedule existence",
+                scheduleID: scheduleID,
+                error: err
+            };
+        }
+    }
+}
+

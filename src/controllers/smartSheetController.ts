@@ -49,6 +49,9 @@ const wipJobArchivedSheetId = process.env.WIP_JOB_ARCHIVED_SHEET_ID ?? "";
 const jobCardV2ActiveSheetId = process.env.JOB_CARD_SHEET_V2_ID ? process.env.JOB_CARD_SHEET_V2_ID : "";
 const jobCardV2MovePastSheetId = process.env.JOB_CARD_V2_MOVE_PAST_SHEET_ID ?? "";
 
+// Roofing Schedules - Dedicated Sheet IDs
+const roofingSchedulesActiveFromDbSheetId = process.env.ROOFING_SCHEDULES_ACTIVE_FROM_DB_SHEET_ID ?? "";
+const roofingSchedulesArchivedFromDbSheetId = process.env.ROOFING_SCHEDULES_ARCHIVED_FROM_DB_SHEET_ID ?? "";
 
 
 // Define interfaces for Smartsheet events and cells
@@ -1229,5 +1232,86 @@ export const updateAmountValuesInRoofingWipSheet = async (req: Request, res: Res
     } catch (err) {
         console.log("ERror", err)
         res.status(500).json({ err: err })
+    }
+}
+
+/**
+ * Controller to check schedule deletion status
+ * Validates if a schedule (by ID) exists in SimPro and updates IsDeleted column in Smartsheet
+ * 
+ * Query Parameters:
+ *   - scheduleId (optional): Specific schedule ID to validate. If not provided, validates all schedules
+ *   - activeSheetId (optional): Override default active sheet ID from environment
+ *   - archivedSheetId (optional): Override default archived sheet ID from environment
+ * 
+ * @example
+ * GET /api/smartsheet/check-schedule-deletion?scheduleId=12345
+ * GET /api/smartsheet/check-schedule-deletion (checks all schedules)
+ */
+export const checkScheduleDeletionStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+        console.log("📋 Schedule Deletion Check Controller: Request started");
+        console.log("Query parameters:", req.query);
+
+        const scheduleIdParam = req.query.scheduleId as string | undefined;
+        const activeSheetIdParam = req.query.activeSheetId as string | undefined;
+        const archivedSheetIdParam = req.query.archivedSheetId as string | undefined;
+
+        // Parse schedule ID if provided
+        let scheduleIdToCheck: number | string | undefined;
+        if (scheduleIdParam) {
+            scheduleIdToCheck = isNaN(Number(scheduleIdParam)) ? scheduleIdParam : Number(scheduleIdParam);
+            console.log(`🎯 Validating specific schedule ID: ${scheduleIdToCheck}`);
+        } else {
+            console.log("🔍 Validating all schedules in configured sheets");
+        }
+
+        // Prepare sheet IDs with flexibility:
+        // - If both params missing: use env (both sheets)
+        // - If only one param passed: use only that sheet + env as fallback
+        // - If both params passed: use both params
+        let sheetIdsOverride: { activeSheetId?: string; archivedSheetId?: string; sheetsToProcess?: string[] } | undefined;
+        
+        if (activeSheetIdParam || archivedSheetIdParam) {
+            sheetIdsOverride = {
+                activeSheetId: activeSheetIdParam,
+                archivedSheetId: archivedSheetIdParam,
+                sheetsToProcess: [] // Track which sheets to process
+            };
+            
+            // Determine which sheets to process based on what was passed
+            if (activeSheetIdParam && !archivedSheetIdParam) {
+                sheetIdsOverride.sheetsToProcess = ['active'];
+                console.log(`📊 Processing only ACTIVE sheet from param: ${activeSheetIdParam}`);
+            } else if (archivedSheetIdParam && !activeSheetIdParam) {
+                sheetIdsOverride.sheetsToProcess = ['archived'];
+                console.log(`📊 Processing only ARCHIVED sheet from param: ${archivedSheetIdParam}`);
+            } else {
+                sheetIdsOverride.sheetsToProcess = ['active', 'archived'];
+                console.log(`📊 Processing both sheets from params: Active=${activeSheetIdParam}, Archived=${archivedSheetIdParam}`);
+            }
+        }
+
+        // Call the Smartsheet service method
+        const result = await SmartsheetService.checkAndUpdateScheduleDeletionStatus(
+            scheduleIdToCheck,
+            sheetIdsOverride
+        );
+
+        console.log("✅ Schedule deletion check completed successfully");
+        res.status(200).json({
+            status: true,
+            message: "Schedule deletion check completed successfully",
+            data: result,
+        });
+    } catch (err) {
+        console.error("❌ Error in checkScheduleDeletionStatus controller:", err);
+        const errorMessage = err instanceof Error ? err.message : JSON.stringify(err);
+        
+        res.status(500).json({
+            status: false,
+            message: "Error checking schedule deletion status",
+            error: errorMessage,
+        });
     }
 }

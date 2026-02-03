@@ -4,6 +4,7 @@ import { CostCenterJobInfo, SimproAccountType, SimproContractorJobType, SimproCo
 import { SimproContractorWorkOrderType, SmartsheetColumnType, SmartsheetSheetRowsType } from "../../types/smartsheet.types";
 import { convertSimproContractorDataToSmartsheetFormat, convertSimproContractorJobDataToSmartsheetFormatForUpdate, convertSimprocostCenterDataToSmartsheetFormatForUpdate, convertSimproRoofingDataToSmartsheetFormat, convertSimproScheduleDataToSmartsheetFormat, convertSimproScheduleDataToSmartsheetFormatForUpdate } from "../../utils/transformSimproToSmartsheetHelper";
 import { fetchSimproPaginatedData } from "../SimproServices/simproPaginationService";
+import { validateScheduleExistence } from "../SimproServices/simproScheduleService";
 import { extractLineItemsDataFromContractorJob, splitIntoChunks } from "../../utils/helper";
 const SmartsheetClient = require('smartsheet');
 const smartSheetAccessToken: string | undefined = process.env.SMARTSHEET_ACCESS_TOKEN;
@@ -14,6 +15,10 @@ const wipJobArchivedSheetId = process.env.WIP_JOB_ARCHIVED_SHEET_ID ?? "";
 const jobCardV2MovePastSheetId = process.env.JOB_CARD_V2_MOVE_PAST_SHEET_ID ?? "";
 const workOrderLineItemsActiveSheetId = process.env.WORKORDER_LINE_ITEMS_ACTIVE_SHEET_ID ?? "";
 const workOrderLineItemsArchivedSheetId = process.env.WORKORDER_LINE_ITEMS_ARCHIVED_SHEET_ID ?? "";
+
+// Roofing Schedules - Dedicated Sheet IDs
+const roofingSchedulesActiveFromDbSheetId = process.env.ROOFING_SCHEDULES_ACTIVE_FROM_DB_SHEET_ID ?? "";
+const roofingSchedulesArchivedFromDbSheetId = process.env.ROOFING_SCHEDULES_ARCHIVED_FROM_DB_SHEET_ID ?? "";
 export class SmartsheetService {
 
 
@@ -992,6 +997,232 @@ export class SmartsheetService {
         return allResponses;
     }
 
+    /**
+     * Checks schedule deletion status in SimPro and updates the IsDeleted column in Smartsheet
+     * This method iterates through specified sheets, validates each schedule's existence in SimPro,
+     * and marks deleted schedules in Smartsheet
+     * 
+     * @param scheduleIdToCheck - Optional: Specific schedule ID to check. If not provided, checks all schedules in both sheets
+     * @param sheetIds - Optional: Specific sheet IDs to check. If not provided, uses environment sheet IDs
+     *                   Can include sheetsToProcess array to specify which sheets to process: ['active'] | ['archived'] | ['active', 'archived']
+     * @returns Object with operation results and summary
+     */
+    static async checkAndUpdateScheduleDeletionStatus(
+        scheduleIdToCheck?: number | string,
+        sheetIds?: { activeSheetId?: string; archivedSheetId?: string; sheetsToProcess?: string[] }
+    ) {
+        try {
+            console.log("🔍 Schedule Deletion Check: Starting validation process...");
+            
+            // Determine which sheets to process
+            const sheetsToProcess = sheetIds?.sheetsToProcess || ['active', 'archived']; // Default: both sheets
+            
+            // Use provided sheet IDs or fall back to environment variables for roofing schedules
+            const activeSheetId = sheetIds?.activeSheetId || roofingSchedulesActiveFromDbSheetId;
+            const archivedSheetId = sheetIds?.archivedSheetId || roofingSchedulesArchivedFromDbSheetId;
+
+            // Validate that we have the sheet IDs we need to process
+            if (sheetsToProcess.includes('active') && !activeSheetId) {
+                throw new Error(
+                    "Active sheet ID not configured. Please set ROOFING_SCHEDULES_ACTIVE_FROM_DB_SHEET_ID environment variable or pass activeSheetId parameter"
+                );
+            }
+            
+            if (sheetsToProcess.includes('archived') && !archivedSheetId) {
+                throw new Error(
+                    "Archived sheet ID not configured. Please set ROOFING_SCHEDULES_ARCHIVED_FROM_DB_SHEET_ID environment variable or pass archivedSheetId parameter"
+                );
+            }
+
+            console.log(`📋 Using sheets: Active=${activeSheetId}, Archived=${archivedSheetId}`);
+
+            const results: {
+                totalSchedulesChecked: number;
+                deletedSchedulesFound: number;
+                activeSchedulesFound: number;
+                erroredSchedules: Array<{ rowId: number | string; error: string }>;
+                updatedRows: Array<number | string>;
+            } = {
+                totalSchedulesChecked: 0,
+                deletedSchedulesFound: 0,
+                activeSchedulesFound: 0,
+                erroredSchedules: [],
+                updatedRows: [],
+            };
+
+            // Process sheets based on sheetsToProcess array
+            const sheetsToCheck = [
+                { id: activeSheetId, name: "Active Schedule Sheet", type: 'active' },
+                { id: archivedSheetId, name: "Archived Schedule Sheet", type: 'archived' },
+            ].filter(sheet => sheetsToProcess.includes(sheet.type));
+
+            if (sheetsToCheck.length === 0) {
+                throw new Error("No sheets to process. Invalid sheetsToProcess configuration.");
+            }
+
+            console.log(`📋 Processing ${sheetsToCheck.length} sheet(s): ${sheetsToCheck.map(s => s.type).join(', ')}`);
+
+            for (const sheetConfig of sheetsToCheck) {
+                try {
+                    console.log(`\n📄 Processing ${sheetConfig.name} (ID: ${sheetConfig.id})...`);
+                    
+                    const sheetInfo = await smartsheet.sheets.getSheet({ id: sheetConfig.id });
+                    const columns = sheetInfo.columns;
+                    const rows = sheetInfo.rows;
+
+                    // Find column IDs for required fields
+                    const scheduleIdColumn = columns.find((col: SmartsheetColumnType) => col.title === "ID-Schedule");
+                    const jobIdColumn = columns.find((col: SmartsheetColumnType) => col.title === "ID-Job");
+                    const sectionIdColumn = columns.find((col: SmartsheetColumnType) => col.title === "ID-Section");
+                    const costCenterIdColumn = columns.find((col: SmartsheetColumnType) => col.title === "ID-CostCentre");
+                    const isDeletedColumn = columns.find((col: SmartsheetColumnType) => col.title === "ISDeleted");
+
+                    if (!scheduleIdColumn || !jobIdColumn || !sectionIdColumn || !costCenterIdColumn || !isDeletedColumn) {
+                        console.warn(
+                            `⚠️ ${sheetConfig.name}: Missing required columns. ` +
+                            `Found: ID-Schedule=${!!scheduleIdColumn}, ID-Job=${!!jobIdColumn}, ` +
+                            `ID-Section=${!!sectionIdColumn}, ID-CostCentre=${!!costCenterIdColumn}, ISDeleted=${!!isDeletedColumn}`
+                        );
+                        continue;
+                    }
+
+                    const scheduleIdColId = scheduleIdColumn.id;
+                    const jobIdColId = jobIdColumn.id;
+                    const sectionIdColId = sectionIdColumn.id;
+                    const costCenterIdColId = costCenterIdColumn.id;
+                    const isDeletedColId = isDeletedColumn.id;
+
+                    // Filter rows if specific schedule ID is provided
+                    let rowsToProcess = rows;
+                    if (scheduleIdToCheck) {
+                        rowsToProcess = rows.filter((row: SmartsheetSheetRowsType) => {
+                            const scheduleCell = row.cells.find((cell) => cell.columnId === scheduleIdColId);
+                            return scheduleCell?.value === scheduleIdToCheck || scheduleCell?.value === scheduleIdToCheck.toString();
+                        });
+                        console.log(`🎯 Filtered to ${rowsToProcess.length} row(s) for schedule ID: ${scheduleIdToCheck}`);
+                    }
+
+                    // TODO: TESTING - Remove this after testing. Limits to first 20 rows only
+                    // const TEST_MODE = true; // Set to false to process all rows
+                    // if (TEST_MODE) {
+                    //     rowsToProcess = rowsToProcess.slice(0, 20);
+                    //     console.log(`🧪 TEST MODE ENABLED: Limited to first 20 rows. Processing ${rowsToProcess.length} rows.`);
+                    // }
+
+                    // Process each row
+                    const rowsToUpdate: any[] = [];
+                    for (const row of rowsToProcess) {
+                        try {
+                            const scheduleCell = row.cells.find((cell: any) => cell.columnId === scheduleIdColId);
+                            const jobCell = row.cells.find((cell: any) => cell.columnId === jobIdColId);
+                            const sectionCell = row.cells.find((cell: any) => cell.columnId === sectionIdColId);
+                            const costCenterCell = row.cells.find((cell: any) => cell.columnId === costCenterIdColId);
+
+                            const scheduleId = scheduleCell?.value;
+                            const jobId = jobCell?.value;
+                            const sectionId = sectionCell?.value;
+                            const costCenterId = costCenterCell?.value;
+
+                            // Skip if any required field is missing
+                            if (!scheduleId || !jobId || !sectionId || !costCenterId) {
+                                console.log(
+                                    `⏭️ Row ${row.id}: Skipping - missing required fields ` +
+                                    `(S:${scheduleId}, J:${jobId}, Sec:${sectionId}, CC:${costCenterId})`
+                                );
+                                continue;
+                            }
+
+                            results.totalSchedulesChecked++;
+
+                            // Validate schedule existence in SimPro
+                            const validationResult = await validateScheduleExistence(
+                                jobId,
+                                sectionId,
+                                costCenterId,
+                                scheduleId
+                            );
+
+                            if (!validationResult) {
+                                throw new Error(`Validation result is undefined for schedule ${scheduleId}`);
+                            }
+
+                            const isDeletedValue = validationResult.exists ? "No" : "Yes";
+                            if (!validationResult.exists) {
+                                results.deletedSchedulesFound++;
+                                console.log(
+                                    `❌ Schedule ${scheduleId} marked as DELETED (Job:${jobId}, Section:${sectionId}, CC:${costCenterId})`
+                                );
+                            } else {
+                                results.activeSchedulesFound++;
+                                console.log(
+                                    `✅ Schedule ${scheduleId} is ACTIVE (Job:${jobId}, Section:${sectionId}, CC:${costCenterId})`
+                                );
+                            }
+
+                            // Queue row for update
+                            rowsToUpdate.push({
+                                id: row.id,
+                                cells: [{ columnId: isDeletedColId, value: isDeletedValue }],
+                            });
+                        } catch (err: any) {
+                            console.error(`❌ Error processing row ${row.id}:`, err);
+                            results.erroredSchedules.push({
+                                rowId: row.id,
+                                error: err instanceof Error ? err.message : JSON.stringify(err),
+                            });
+                        }
+                    }
+
+                    // Update Smartsheet in batches
+                    if (rowsToUpdate.length > 0) {
+                        console.log(`📝 Updating ${rowsToUpdate.length} rows in ${sheetConfig.name}...`);
+                        const chunks = splitIntoChunks(rowsToUpdate, 300); // Smartsheet API batch limit
+
+                        for (let i = 0; i < chunks.length; i++) {
+                            try {
+                                await smartsheet.sheets.updateRow({
+                                    sheetId: sheetConfig.id,
+                                    body: chunks[i],
+                                });
+                                console.log(
+                                    `✅ Updated batch ${i + 1}/${chunks.length} (${chunks[i].length} rows) in ${sheetConfig.name}`
+                                );
+                                results.updatedRows.push(...chunks[i].map((r) => r.id));
+                            } catch (updateErr) {
+                                console.error(`❌ Error updating batch ${i + 1} in ${sheetConfig.name}:`, updateErr);
+                                throw updateErr;
+                            }
+                        }
+                    } else {
+                        console.log(`ℹ️ No rows to update in ${sheetConfig.name}`);
+                    }
+                } catch (sheetErr) {
+                    console.error(`❌ Error processing ${sheetConfig.name}:`, sheetErr);
+                    throw sheetErr;
+                }
+            }
+
+            console.log("\n📊 Summary:");
+            console.log(`  Total Schedules Checked: ${results.totalSchedulesChecked}`);
+            console.log(`  Deleted Schedules Found: ${results.deletedSchedulesFound}`);
+            console.log(`  Active Schedules Found: ${results.activeSchedulesFound}`);
+            console.log(`  Rows Updated: ${results.updatedRows.length}`);
+            console.log(`  Errors Encountered: ${results.erroredSchedules.length}`);
+
+            return {
+                status: "success",
+                message: "Schedule deletion check completed",
+                ...results,
+            };
+        } catch (err) {
+            console.error("❌ Error in checkAndUpdateScheduleDeletionStatus:", err);
+            throw {
+                status: "error",
+                message: "Error checking schedule deletion status",
+                error: err instanceof Error ? err.message : JSON.stringify(err),
+            };
+        }
+    }
 
 
 }

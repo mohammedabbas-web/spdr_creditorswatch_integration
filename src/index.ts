@@ -32,6 +32,7 @@ if (process.env.NODE_ENV === 'production') {
         './cron/createUpdateInvoiceCreditNoteScheduler',
         './cron/deleteDataScheduler',
         './cron/updateLateFeeScheduler',
+        './cron/roofingScheduleDeletedCheckfromDBScheduler',
         // './cron/taskWorkingHourScheduler',
         // './cron/jobCardScheduler',
         // './cron/jobCardMinimalUpdateScheduler',
