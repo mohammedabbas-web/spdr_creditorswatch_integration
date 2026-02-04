@@ -1188,9 +1188,17 @@ export class SmartsheetService {
                                     `✅ Updated batch ${i + 1}/${chunks.length} (${chunks[i].length} rows) in ${sheetConfig.name}`
                                 );
                                 results.updatedRows.push(...chunks[i].map((r) => r.id));
-                            } catch (updateErr) {
+                            } catch (updateErr: any) {
                                 console.error(`❌ Error updating batch ${i + 1} in ${sheetConfig.name}:`, updateErr);
-                                throw updateErr;
+                                // Log failed row details but continue processing other batches
+                                if (updateErr?.detail?.rowId) {
+                                    console.error(`   Failed row ID: ${updateErr.detail.rowId}`);
+                                }
+                                // Continue with next batch instead of throwing
+                                results.erroredSchedules.push({
+                                    rowId: updateErr?.detail?.rowId || `batch-${i + 1}`,
+                                    error: `Update failed: ${updateErr?.message || JSON.stringify(updateErr)}`,
+                                });
                             }
                         }
                     } else {
