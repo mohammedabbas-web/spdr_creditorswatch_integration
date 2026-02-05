@@ -1076,12 +1076,13 @@ export class SmartsheetService {
                     const sectionIdColumn = columns.find((col: SmartsheetColumnType) => col.title === "ID-Section");
                     const costCenterIdColumn = columns.find((col: SmartsheetColumnType) => col.title === "ID-CostCentre");
                     const isDeletedColumn = columns.find((col: SmartsheetColumnType) => col.title === "ISDeleted");
+                    const siteTechnicianColumn = columns.find((col: SmartsheetColumnType) => col.title === "Site-Technician");
 
-                    if (!scheduleIdColumn || !jobIdColumn || !sectionIdColumn || !costCenterIdColumn || !isDeletedColumn) {
+                    if (!scheduleIdColumn || !jobIdColumn || !sectionIdColumn || !costCenterIdColumn || !isDeletedColumn || !siteTechnicianColumn) {
                         console.warn(
                             `⚠️ ${sheetConfig.name}: Missing required columns. ` +
                             `Found: ID-Schedule=${!!scheduleIdColumn}, ID-Job=${!!jobIdColumn}, ` +
-                            `ID-Section=${!!sectionIdColumn}, ID-CostCentre=${!!costCenterIdColumn}, ISDeleted=${!!isDeletedColumn}`
+                            `ID-Section=${!!sectionIdColumn}, ID-CostCentre=${!!costCenterIdColumn}, ISDeleted=${!!isDeletedColumn}, Site-Technician=${!!siteTechnicianColumn}`
                         );
                         continue;
                     }
@@ -1091,6 +1092,7 @@ export class SmartsheetService {
                     const sectionIdColId = sectionIdColumn.id;
                     const costCenterIdColId = costCenterIdColumn.id;
                     const isDeletedColId = isDeletedColumn.id;
+                    const siteTechnicianColId = siteTechnicianColumn.id;
 
                     // Filter rows if specific schedule ID is provided
                     let rowsToProcess = rows;
@@ -1117,11 +1119,13 @@ export class SmartsheetService {
                             const jobCell = row.cells.find((cell: any) => cell.columnId === jobIdColId);
                             const sectionCell = row.cells.find((cell: any) => cell.columnId === sectionIdColId);
                             const costCenterCell = row.cells.find((cell: any) => cell.columnId === costCenterIdColId);
+                            const siteTechnicianCell = row.cells.find((cell: any) => cell.columnId === siteTechnicianColId);
 
                             const scheduleId = scheduleCell?.value;
                             const jobId = jobCell?.value;
                             const sectionId = sectionCell?.value;
                             const costCenterId = costCenterCell?.value;
+                            const siteTechnicianValue = siteTechnicianCell?.value;
 
                             // Skip if any required field is missing
                             if (!scheduleId || !jobId || !sectionId || !costCenterId) {
@@ -1146,16 +1150,28 @@ export class SmartsheetService {
                                 throw new Error(`Validation result is undefined for schedule ${scheduleId}`);
                             }
 
-                            const isDeletedValue = validationResult.exists ? "false" : "true";
-                            if (!validationResult.exists) {
+                            // Determine if deleted:
+                            // - Schedule doesn't exist → Deleted
+                            // - Schedule exists but Staff doesn't match Site-Technician → Deleted (reassigned)
+                            // - Schedule exists and Staff matches Site-Technician → Active
+                            const isStaffMatching = validationResult.exists && 
+                                                    validationResult.staffName && 
+                                                    validationResult.staffName.toLowerCase() === String(siteTechnicianValue).toLowerCase();
+                            
+                            const isDeletedValue = isStaffMatching ? false : true;
+                            
+                            if (isDeletedValue === true) {
                                 results.deletedSchedulesFound++;
+                                const reason = !validationResult.exists 
+                                    ? "Schedule not found in SimPro" 
+                                    : `Staff mismatch (SimPro: ${validationResult.staffName}, Sheet: ${siteTechnicianValue})`;
                                 console.log(
-                                    `❌ Schedule ${scheduleId} marked as DELETED (Job:${jobId}, Section:${sectionId}, CC:${costCenterId})`
+                                    `❌ Schedule ${scheduleId} marked as DELETED - ${reason} (Job:${jobId}, Section:${sectionId}, CC:${costCenterId})`
                                 );
                             } else {
                                 results.activeSchedulesFound++;
                                 console.log(
-                                    `✅ Schedule ${scheduleId} is ACTIVE (Job:${jobId}, Section:${sectionId}, CC:${costCenterId})`
+                                    `✅ Schedule ${scheduleId} is ACTIVE (Staff: ${validationResult.staffName}, Job:${jobId}, Section:${sectionId}, CC:${costCenterId})`
                                 );
                             }
 

@@ -456,6 +456,7 @@ export const validateScheduleExistence = async (
             return {
                 exists: true,
                 scheduleID: scheduleID,
+                staffName: response?.data?.Staff?.Name || null, // Return Staff Name
                 message: "Schedule found in SimPro",
                 data: response.data
             };
@@ -479,6 +480,7 @@ export const validateScheduleExistence = async (
                 return {
                     exists: false,
                     scheduleID: scheduleID,
+                    staffName: null, // No staff since schedule doesn't exist
                     message: "Schedule not found or deleted from SimPro",
                     errorStatus: err.response?.status
                 };

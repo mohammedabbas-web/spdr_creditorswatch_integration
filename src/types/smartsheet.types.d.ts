@@ -192,6 +192,7 @@ export type SimproContractorWorkOrderType ={
 export type ScheduleValidationResultType = {
     exists: boolean;
     scheduleID: number | string;
+    staffName: string | null; // Staff name from SimPro if schedule exists
     message: string;
     data?: any;
     errorStatus?: number;
